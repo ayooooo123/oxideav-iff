@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The registry decoder implements `Decoder::output_video_dimensions` /
+  `output_pixel_format`: the size and native layout (`Pal8` / `Rgb24` /
+  `Rgba`) of the image `receive_frame` last returned; before the first,
+  the pending image.
+
 ## [0.0.11](https://github.com/OxideAV/oxideav-iff/compare/v0.0.10...v0.0.11) - 2026-10-04
 
 ### Other

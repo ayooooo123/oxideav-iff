@@ -243,14 +243,28 @@ pub fn make_decoder(_params: &CodecParameters) -> oxideav_core::Result<Box<dyn D
     Ok(Box::new(IffDecoder {
         codec_id: CodecId::new(CODEC_ID_STR),
         pending: None,
+        last_output: None,
         eof: false,
     }))
 }
 
+/// The size and pixel layout of a decoded image.
+type Layout = (u32, u32, PixelFormat);
+
 struct IffDecoder {
     codec_id: CodecId,
-    pending: Option<VideoFrame>,
+    pending: Option<(VideoFrame, Layout)>,
+    /// The layout of the frame `receive_frame` last returned.
+    last_output: Option<Layout>,
     eof: bool,
+}
+
+impl IffDecoder {
+    /// The frame last returned; before the first, the pending one.
+    fn reported_layout(&self) -> Option<Layout> {
+        self.last_output
+            .or_else(|| self.pending.as_ref().map(|(_, layout)| *layout))
+    }
 }
 
 impl Decoder for IffDecoder {
@@ -259,12 +273,20 @@ impl Decoder for IffDecoder {
     }
     fn send_packet(&mut self, packet: &Packet) -> oxideav_core::Result<()> {
         let image = crate::decode(&packet.data)?;
-        self.pending = Some(image_into_video_frame(image, packet.pts));
+        let layout = (
+            image.width,
+            image.height,
+            to_core_pixel_format(image.format),
+        );
+        self.pending = Some((image_into_video_frame(image, packet.pts), layout));
         Ok(())
     }
     fn receive_frame(&mut self) -> oxideav_core::Result<Frame> {
         match self.pending.take() {
-            Some(f) => Ok(Frame::Video(f)),
+            Some((f, layout)) => {
+                self.last_output = Some(layout);
+                Ok(Frame::Video(f))
+            }
             None => {
                 if self.eof {
                     Err(oxideav_core::Error::Eof)
@@ -273,6 +295,14 @@ impl Decoder for IffDecoder {
                 }
             }
         }
+    }
+    fn output_video_dimensions(&self) -> Option<(u32, u32)> {
+        self.reported_layout()
+            .map(|(w, h, _)| (w, h))
+            .filter(|&(w, h)| w > 0 && h > 0)
+    }
+    fn output_pixel_format(&self) -> Option<PixelFormat> {
+        self.reported_layout().map(|(_, _, format)| format)
     }
     fn flush(&mut self) -> oxideav_core::Result<()> {
         self.eof = true;
