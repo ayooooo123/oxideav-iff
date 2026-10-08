@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- AIFF, and AIFF-C `NONE`/`twos`, are signed big-endian PCM of the COMM
+  sample size (`pcm_s8`, `pcm_s16be`, `pcm_s24be`, `pcm_s32be`), as
+  FFmpeg's aiffdec reads them; 8, 24 and 32-bit files were `pcm_s16be`.
+
 ### Added
 
 - The registry decoder implements `Decoder::output_video_dimensions` /

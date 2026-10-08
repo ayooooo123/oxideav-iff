@@ -62,7 +62,7 @@ impl AiffDemuxer {
     /// translated into the [`Demuxer`] trait surface.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
         let form = crate::aiff::form::parse(&bytes).map_err(map_aiff_error)?;
-        let mut params = CodecParameters::audio(codec_id_for(form.common.compression_type));
+        let mut params = CodecParameters::audio(codec_id_for(form.common.compression_type, form.common.sample_size));
         params.sample_rate = Some(form.common.sample_rate as u32);
         params.channels = Some(form.common.num_channels);
         params.sample_format =
@@ -177,15 +177,26 @@ fn probe(p: &ProbeData<'_>) -> u8 {
 /// Map the on-wire AIFF-C `compressionType` FourCC to the codec id
 /// the framework registry knows for that bitstream. For PCM flavours
 /// the id stays a generic `"pcm"` family; for compressed flavours the
-/// id matches a sibling codec crate. AIFF v1.3 (no compressionType)
-/// is treated as big-endian 16-bit PCM.
-fn codec_id_for(ct: Option<[u8; 4]>) -> CodecId {
+/// id matches a sibling codec crate. AIFF v1.3 (no compressionType), and
+/// AIFF-C `NONE`/`twos`, are signed big-endian PCM of the COMM
+/// `sample_size`, as FFmpeg's aiffdec reads them (`aiff_codec_get_id`:
+/// up to 8, 16, 24 or 32 bits).
+fn codec_id_for(ct: Option<[u8; 4]>, sample_size: u16) -> CodecId {
+    let integer_pcm = || {
+        CodecId::new(match sample_size {
+            0..=8 => "pcm_s8",
+            9..=16 => "pcm_s16be",
+            17..=24 => "pcm_s24be",
+            25..=32 => "pcm_s32be",
+            _ => "unknown",
+        })
+    };
     let ct = match ct {
         Some(c) => c,
-        None => return CodecId::new("pcm_s16be"),
+        None => return integer_pcm(),
     };
     match &ct {
-        b"NONE" | b"twos" => CodecId::new("pcm_s16be"),
+        b"NONE" | b"twos" => integer_pcm(),
         b"sowt" => CodecId::new("pcm_s16le"),
         b"raw " => CodecId::new("pcm_u8"),
         b"fl32" | b"FL32" => CodecId::new("pcm_f32be"),
@@ -349,6 +360,39 @@ mod tests {
         assert_eq!(s.params.sample_format, Some(SampleFormat::S16));
         assert_eq!(s.duration, Some(2));
         assert_eq!(s.time_base, TimeBase::new(1, 48_000));
+    }
+
+    /// An AIFC whose COMM says `bits` and compression `ct`.
+    fn build_aifc(bits: i16, ct: &[u8; 4]) -> Vec<u8> {
+        let mut comm_body = Vec::new();
+        comm_body.extend_from_slice(&1_i16.to_be_bytes());
+        comm_body.extend_from_slice(&1_u32.to_be_bytes());
+        comm_body.extend_from_slice(&bits.to_be_bytes());
+        comm_body.extend_from_slice(&ext(44_100.0));
+        comm_body.extend_from_slice(ct);
+        comm_body.extend_from_slice(&[0, 0]);
+        let ssnd_body = [0u8; 12];
+        let mut inner = b"AIFC".to_vec();
+        inner.extend_from_slice(&pack(b"FVER", &0xA280_5140_u32.to_be_bytes()));
+        inner.extend_from_slice(&pack(b"COMM", &comm_body));
+        inner.extend_from_slice(&pack(b"SSND", &ssnd_body));
+        [b"FORM".to_vec(), (inner.len() as u32).to_be_bytes().to_vec(), inner].concat()
+    }
+
+    /// FFmpeg's aiffdec: AIFF, and AIFF-C `NONE`/`twos`, are signed
+    /// big-endian PCM of the COMM sample size (8, 16, 24 or 32 bits).
+    #[test]
+    fn integer_pcm_follows_the_sample_size() {
+        for (bits, want) in [(8u16, "pcm_s8"), (16, "pcm_s16be"), (24, "pcm_s24be"), (32, "pcm_s32be"), (12, "pcm_s16be"), (20, "pcm_s24be")] {
+            let width = usize::from(bits.div_ceil(8));
+            let f = build_aiff(1, 1, bits, 44_100.0, &vec![0; width]);
+            let dx = AiffDemuxer::from_bytes(f).unwrap();
+            assert_eq!(dx.streams()[0].params.codec_id, CodecId::new(want), "AIFF {bits} bits");
+            for ct in [b"NONE", b"twos"] {
+                let dx = AiffDemuxer::from_bytes(build_aifc(bits as i16, ct)).unwrap();
+                assert_eq!(dx.streams()[0].params.codec_id, CodecId::new(want), "AIFC {ct:?} {bits} bits");
+            }
+        }
     }
 
     #[test]
