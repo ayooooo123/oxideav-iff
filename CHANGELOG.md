@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Rgba`) of the image `receive_frame` last returned; before the first,
   the pending image.
 
+### Fixed
+
+- Hostile input (found by the new `registry_path` fuzz target and the
+  round-477 `ilbm_decode` campaign): the `iff_ilbm` / `iff_acbm` /
+  `iff_anim` demuxers no longer underflow on a `FORM` whose size is
+  shorter than its 4-byte type (`InvalidData` instead of a panic in
+  debug builds); `parse_ilbm` / `parse_acbm` size the RGBA working
+  buffer only after the `BODY` is shown able to fill the declared
+  geometry (uncompressed: every byte, ByteRun1: ≤ 64× expansion) and
+  after the plane count is validated, so a forged `BMHD` (65535² × 4
+  bytes, or 0 planes on a huge geometry) is refused instead of
+  allocating gigabytes.
+
+
 ## [0.0.11](https://github.com/OxideAV/oxideav-iff/compare/v0.0.10...v0.0.11) - 2026-10-04
 
 ### Other
